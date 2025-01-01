@@ -1,0 +1,46 @@
+# Data Configuration
+data:
+  dataset_path: "path/to/dataset"
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  image_size: [800, 600]
+  
+# Model Configuration
+model:
+  num_gaussians: 100000
+  position_lr: 0.001
+  feature_lr: 0.01
+  scale_lr: 0.001
+  rotation_lr: 0.001
+  opacity_lr: 0.01
+
+# Training Configuration
+training:
+  batch_size: 1
+  num_epochs: 100
+  num_workers: 4
+  checkpoint_dir: "checkpoints"
+  resume_training: false
+  checkpoint_path: null
+  
+# Distributed Training
+distributed:
+  enabled: true
+  world_size: -1  # auto-detect
+  backend: "nccl"
+  
+# Logging
+logging:
+  wandb_project: "gaussian_splatting"
+  log_interval: 10
+  eval_interval: 100
+  
+# Deployment
+deployment:
+  tensorrt:
+    precision: "fp16"
+    workspace_size: 1024  # MB
+  api:
+    host: "0.0.0.0"
+    port: 8000 

@@ -1,0 +1,32 @@
+gaussian_splatting/
+├── data_processing/
+│   ├── __init__.py
+│   ├── preprocessor.py
+│   ├── augmentation.py
+│   └── dataset.py
+├── model/
+│   ├── __init__.py
+│   ├── gaussian_splatting.py
+│   ├── loss.py
+│   └── evaluation.py
+├── training/
+│   ├── __init__.py
+│   ├── trainer.py
+│   └── distributed.py
+├── deployment/
+│   ├── __init__.py
+│   ├── tensorrt_converter.py
+│   └── api.py
+├── utils/
+│   ├── __init__.py
+│   ├── config.py
+│   └── logger.py
+├── scripts/
+│   ├── preprocess.py
+│   ├── train.py
+│   ├── evaluate.py
+│   └── deploy.py
+├── configs/
+│   └── default_config.yaml
+├── requirements.txt
+└── README.md 
