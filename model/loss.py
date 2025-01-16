@@ -44,22 +44,19 @@ class GaussianSplatLoss(nn.Module):
         gaussian_params: Optional[Dict[str, torch.Tensor]] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        Compute total loss.
+        Compute combined loss.
         
         Args:
-            predictions (Dict): Dictionary containing:
-                - rgb: Rendered images (B, 3, H, W)
-                - depth: Optional depth maps
-                - normals: Optional normal maps
-            targets (Dict): Dictionary containing ground truth values
-            gaussian_params (Dict, optional): Gaussian parameters for regularization
+            predictions: Dictionary containing model predictions
+            targets: Dictionary containing ground truth values
+            gaussian_params: Optional dictionary containing Gaussian parameters
             
         Returns:
-            Dict containing individual and total losses
+            Dictionary containing individual and total losses
         """
         losses = {}
         
-        # RGB reconstruction loss
+        # RGB loss
         losses['rgb_loss'] = self._compute_rgb_loss(
             predictions['rgb'],
             targets['rgb']
@@ -72,33 +69,33 @@ class GaussianSplatLoss(nn.Module):
         )
         
         # LPIPS loss
-        losses['lpips_loss'] = self.lpips_loss(
+        losses['lpips_loss'] = self._compute_lpips_loss(
             predictions['rgb'],
             targets['rgb']
-        ).mean()
+        )
         
         # Depth loss if available
-        if 'depth' in predictions and 'depth' in targets:
+        if 'depth' in predictions and 'depth' in targets and targets['depth'] is not None:
             losses['depth_loss'] = self._compute_depth_loss(
                 predictions['depth'],
                 targets['depth'],
                 targets.get('depth_mask')
             )
-            
+        
         # Normal loss if available
-        if 'normals' in predictions and 'normals' in targets:
+        if 'normals' in predictions and 'normals' in targets and targets['normals'] is not None:
             losses['normal_loss'] = self._compute_normal_loss(
                 predictions['normals'],
                 targets['normals'],
                 targets.get('normal_mask')
             )
-            
+        
         # Gaussian regularization if parameters provided
         if gaussian_params is not None:
             losses['opacity_loss'] = self._compute_opacity_regularization(
                 gaussian_params['opacity']
             )
-            
+        
         # Compute total weighted loss
         total_loss = (
             self.rgb_weight * losses['rgb_loss'] +
@@ -112,7 +109,7 @@ class GaussianSplatLoss(nn.Module):
             total_loss += self.normal_weight * losses['normal_loss']
         if 'opacity_loss' in losses:
             total_loss += self.opacity_weight * losses['opacity_loss']
-            
+        
         losses['total_loss'] = total_loss
         
         return losses
@@ -126,27 +123,13 @@ class GaussianSplatLoss(nn.Module):
         Compute RGB reconstruction loss.
         
         Args:
-            predictions (torch.Tensor): Predicted images (B, 3, H, W)
-            targets (torch.Tensor): Ground truth images
+            predictions: Predicted images (B, 3, H, W)
+            targets: Target images (B, 3, H, W)
             
         Returns:
-            torch.Tensor: Combined L1 and MS-SSIM loss
+            L2 loss between predictions and targets
         """
-        # L1 loss
-        l1_loss = F.l1_loss(predictions, targets)
-        
-        # MS-SSIM loss
-        ms_ssim_loss = 1 - self._compute_ms_ssim(predictions, targets)
-        
-        return 0.84 * l1_loss + 0.16 * ms_ssim_loss
-        
-    def _compute_ms_ssim(
-        self,
-        predictions: torch.Tensor,
-        targets: torch.Tensor
-    ) -> torch.Tensor:
-        """Compute MS-SSIM score"""
-        return torch.mean(1 - F.mse_loss(predictions, targets))
+        return F.mse_loss(predictions, targets)
         
     def _compute_perceptual_loss(
         self,
@@ -157,14 +140,23 @@ class GaussianSplatLoss(nn.Module):
         Compute perceptual loss using VGG features.
         
         Args:
-            predictions (torch.Tensor): Predicted images
-            targets (torch.Tensor): Ground truth images
+            predictions: Predicted images (B, 3, H, W)
+            targets: Target images (B, 3, H, W)
             
         Returns:
-            torch.Tensor: Perceptual loss value
+            Perceptual loss value
         """
+        # Normalize inputs
+        mean = torch.tensor([0.485, 0.456, 0.406], device=predictions.device).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=predictions.device).view(1, 3, 1, 1)
+        predictions = (predictions - mean) / std
+        targets = (targets - mean) / std
+        
+        # Extract features
         pred_features = self.vgg_features(predictions)
         target_features = self.vgg_features(targets)
+        
+        # Compute loss
         return F.mse_loss(pred_features, target_features)
         
     def _compute_depth_loss(
@@ -174,26 +166,27 @@ class GaussianSplatLoss(nn.Module):
         mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        Compute depth estimation loss.
+        Compute depth loss.
         
         Args:
-            predictions (torch.Tensor): Predicted depth maps
-            targets (torch.Tensor): Ground truth depth maps
-            mask (torch.Tensor, optional): Valid depth mask
+            predictions: Predicted depth maps (B, 1, H, W)
+            targets: Target depth maps (B, 1, H, W)
+            mask: Optional mask for valid depth values (B, 1, H, W)
             
         Returns:
-            torch.Tensor: Depth loss value
+            Depth loss value
         """
         if mask is None:
             mask = torch.ones_like(targets, dtype=torch.bool)
             
         # Scale-invariant depth loss
-        diff = torch.log(predictions[mask] + 1e-8) - torch.log(targets[mask] + 1e-8)
-        num_valid = mask.sum()
+        diff = predictions[mask] - targets[mask]
+        loss = torch.mean(diff ** 2)
         
-        loss = (diff ** 2).sum() / num_valid
-        loss += (diff.sum() ** 2) / (num_valid ** 2)
-        
+        # Add scale-invariant term
+        if self.config.get('scale_invariant', True):
+            loss -= 0.5 * torch.mean(diff) ** 2
+            
         return loss
         
     def _compute_normal_loss(
@@ -203,27 +196,27 @@ class GaussianSplatLoss(nn.Module):
         mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        Compute normal estimation loss.
+        Compute normal vector loss.
         
         Args:
-            predictions (torch.Tensor): Predicted normal maps
-            targets (torch.Tensor): Ground truth normal maps
-            mask (torch.Tensor, optional): Valid normal mask
+            predictions: Predicted normal vectors (B, 3, H, W)
+            targets: Target normal vectors (B, 3, H, W)
+            mask: Optional mask for valid normal values (B, 1, H, W)
             
         Returns:
-            torch.Tensor: Normal loss value
+            Normal loss value
         """
         if mask is None:
-            mask = torch.ones_like(targets[:, 0:1], dtype=torch.bool)
+            mask = torch.ones_like(targets[:, :1], dtype=torch.bool)
             
         # Normalize vectors
-        pred_normalized = F.normalize(predictions, dim=1)
-        target_normalized = F.normalize(targets, dim=1)
+        pred_normals = F.normalize(predictions, dim=1)
+        target_normals = F.normalize(targets, dim=1)
         
-        # Cosine distance
-        loss = 1 - (pred_normalized * target_normalized).sum(dim=1)
+        # Compute cosine distance
+        cos_dist = 1 - torch.sum(pred_normals * target_normals, dim=1, keepdim=True)
         
-        return torch.mean(loss[mask])
+        return torch.mean(cos_dist[mask])
         
     def _compute_opacity_regularization(
         self,
@@ -233,10 +226,27 @@ class GaussianSplatLoss(nn.Module):
         Compute opacity regularization loss.
         
         Args:
-            opacity (torch.Tensor): Gaussian opacity values
+            opacity: Opacity values (N, 1)
             
         Returns:
-            torch.Tensor: Regularization loss value
+            Regularization loss value
         """
         # Encourage binary opacity values
-        return torch.mean(opacity * (1 - opacity)) 
+        return torch.mean(opacity * (1 - opacity))
+        
+    def _compute_lpips_loss(
+        self,
+        predictions: torch.Tensor,
+        targets: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute LPIPS perceptual loss.
+        
+        Args:
+            predictions: Predicted images (B, 3, H, W)
+            targets: Target images (B, 3, H, W)
+            
+        Returns:
+            LPIPS loss value
+        """
+        return self.lpips_loss(predictions, targets).mean() 

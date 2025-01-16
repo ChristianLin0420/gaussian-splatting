@@ -6,11 +6,11 @@ import logging
 import torch
 from typing import Optional
 
-from ..deployment.tensorrt_converter import TensorRTConverter
-from ..model.gaussian_splatting import GaussianSplat
-from ..utils.logger import setup_logger
+from deployment.tensorrt_converter import TensorRTConverter
+from model.gaussian_splatting import GaussianSplat
+from utils.logger import setup_logger
 
-@hydra.main(config_path="../configs", config_name="default_config")
+@hydra.main(version_base=None, config_path="../configs", config_name="default_config")
 def deploy(config: DictConfig, checkpoint_path: Optional[str] = None):
     """
     Deploy Gaussian Splatting model with TensorRT optimization.

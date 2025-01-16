@@ -5,6 +5,7 @@ import logging
 from typing import Optional, Dict, Any
 import yaml
 import os
+from omegaconf import DictConfig, OmegaConf
 
 from scripts.train import train
 from scripts.evaluate import evaluate
@@ -119,19 +120,24 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         help='Override output directory from config'
     )
 
-def load_configuration(args: argparse.Namespace) -> Config:
+def load_configuration(args: argparse.Namespace) -> DictConfig:
     """Load and validate configuration"""
     config_path = Path(args.config)
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
         
-    # Load base configuration
-    config = Config.from_yaml(args.config)
+    # Load configuration from yaml
+    with open(config_path) as f:
+        config_dict = yaml.safe_load(f)
+    
+    # Convert to OmegaConf DictConfig
+    config = OmegaConf.create(config_dict)
     
     # Update configuration based on command line arguments
     config_updates = create_config_updates(args)
     if config_updates:
-        config.update(config_updates)
+        # Deep merge the config with updates
+        config = OmegaConf.merge(config, OmegaConf.create(config_updates))
         
     return config
 
@@ -168,19 +174,22 @@ def create_config_updates(args: argparse.Namespace) -> Dict[str, Any]:
         
     return updates
 
-def setup_logging(config: Config) -> LoggerManager:
+def setup_logging(config: DictConfig) -> LoggerManager:
     """Set up logging configuration"""
-    log_level = logging.DEBUG if config.logging.debug else logging.INFO
-    
+    # Create logger manager
     logger_manager = LoggerManager(config)
-    logger_manager.setup_root_logger(level=log_level)
+    
+    # Set up root logger
+    root_logger = logger_manager.get_logger('root')
+    root_logger.setLevel(logging.DEBUG if config.get('logging', {}).get('debug', False) else logging.INFO)
     
     return logger_manager
 
-def run_command(args: argparse.Namespace, config: Config, logger: logging.Logger) -> None:
+def run_command(args: argparse.Namespace, config: DictConfig, logger: logging.Logger) -> None:
     """Execute the specified command"""
     try:
         if args.command == 'preprocess':
+            from scripts.preprocess import preprocess
             preprocess(config)
         elif args.command == 'train':
             if args.resume:

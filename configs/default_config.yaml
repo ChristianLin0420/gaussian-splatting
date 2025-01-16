@@ -1,40 +1,62 @@
 # Data Configuration
 data:
-  dataset_path: "path/to/dataset"
+  dataset_path: "data/nerf_synthetic/Synthetic_NeRF/Chair/processed"
   train_split: 0.8
   val_split: 0.1
   test_split: 0.1
-  image_size: [800, 600]
+  image_size: [200, 150]
   
 # Model Configuration
 model:
-  num_gaussians: 100000
+  num_gaussians: 10000
   position_lr: 0.001
   feature_lr: 0.01
   scale_lr: 0.001
   rotation_lr: 0.001
   opacity_lr: 0.01
+  use_gradient_checkpointing: true
+  memory_efficient: true
+  chunk_size: 500
+
+# Loss Configuration
+loss:
+  rgb_weight: 1.0
+  depth_weight: 0.1
+  normal_weight: 0.01
+  opacity_weight: 0.01
+  scale_weight: 0.001
+  rotation_weight: 0.001
+  perceptual_weight: 0.1
+  tv_weight: 0.01
 
 # Training Configuration
 training:
   batch_size: 1
   num_epochs: 100
-  num_workers: 4
+  num_workers: 1
   checkpoint_dir: "checkpoints"
   resume_training: false
   checkpoint_path: null
-  
-# Distributed Training
-distributed:
-  enabled: true
-  world_size: -1  # auto-detect
-  backend: "nccl"
+  distributed:
+    enabled: true
+    world_size: -1  # auto-detect
+    backend: "nccl"
+    init_method: "env://"
+    find_unused_parameters: true
+  optimization:
+    empty_cache_freq: 1
+    backward_passes_per_step: 1
+    max_grad_norm: 1.0
+    max_split_size_mb: 512
   
 # Logging
 logging:
   wandb_project: "gaussian_splatting"
+  wandb_name: "chair"
   log_interval: 10
   eval_interval: 100
+  log_dir: "logs"
+  debug: false
   
 # Deployment
 deployment:

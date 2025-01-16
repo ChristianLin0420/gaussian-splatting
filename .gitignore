@@ -64,3 +64,9 @@ Thumbs.db
 *.mp4
 *.avi
 *.mov
+
+# Wandb
+wandb/
+
+# Dataset
+data/

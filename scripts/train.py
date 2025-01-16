@@ -1,7 +1,6 @@
 import hydra
 import torch
 from omegaconf import DictConfig
-from pathlib import Path
 import wandb
 from torch.utils.data import DataLoader
 import torch.distributed as dist
@@ -10,13 +9,12 @@ import os
 import logging
 from typing import Optional
 
-from ..data_processing.dataset import SceneDataset
-from ..model.gaussian_splatting import GaussianSplat
-from ..model.loss import GaussianSplatLoss
-from ..training.trainer import GaussianSplatTrainer
-from ..utils.logger import setup_logger
+from data_processing.dataset import SceneDataset
+from model.gaussian_splatting import GaussianSplat
+from model.loss import GaussianSplatLoss
+from training.trainer import GaussianSplatTrainer
 
-@hydra.main(config_path="../configs", config_name="default_config")
+@hydra.main(version_base=None, config_path="../configs", config_name="default_config")
 def train(config: DictConfig, resume_path: Optional[str] = None):
     """
     Train Gaussian Splatting model with distributed training support.
@@ -79,9 +77,14 @@ def _train_worker(rank: int, world_size: int, config: DictConfig, resume_path: O
     
     # Initialize wandb for main process only
     if rank == 0 and config.logging.wandb_project:
+        # Convert config to regular dictionary for wandb
+        config_dict = {
+            k: dict(v) if isinstance(v, DictConfig) else v 
+            for k, v in dict(config).items()
+        }
         wandb.init(
             project=config.logging.wandb_project,
-            config=config,
+            config=config_dict,
             resume=True if resume_path else False
         )
     

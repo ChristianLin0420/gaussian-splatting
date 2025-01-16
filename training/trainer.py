@@ -1,15 +1,13 @@
 import torch
 import wandb
-from torch.nn.parallel import DistributedDataParallel
 import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
 from pathlib import Path
-import logging
 from typing import Dict, Optional, Tuple
 from tqdm import tqdm
-import time
 
-from ..utils.logger import setup_logger
-from ..model.evaluation import GaussianSplatEvaluator
+from utils.logger import setup_logger
+from model.evaluation import GaussianSplatEvaluator
 
 class GaussianSplatTrainer:
     """Trainer class for Gaussian Splatting model"""
@@ -22,7 +20,8 @@ class GaussianSplatTrainer:
         device: torch.device,
         rank: int,
         train_loader: torch.utils.data.DataLoader,
-        val_loader: Optional[torch.utils.data.DataLoader] = None
+        val_loader: Optional[torch.utils.data.DataLoader] = None,
+        wandb_name: Optional[str] = None
     ):
         """
         Initialize trainer.
@@ -35,6 +34,7 @@ class GaussianSplatTrainer:
             rank: Process rank for distributed training
             train_loader: Training data loader
             val_loader: Validation data loader
+            wandb_name: Optional name for wandb run (overrides config)
         """
         self.model = model
         self.criterion = criterion
@@ -44,6 +44,16 @@ class GaussianSplatTrainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.logger = setup_logger(__name__)
+        
+        # Initialize wandb if main process
+        if self.is_main_process() and config.logging.wandb_project:
+            print("Initializing wandb")
+            wandb.init(
+                project=config.logging.wandb_project,
+                name=wandb_name or config.logging.get('wandb_name'),
+                config=config,
+                dir=config.training.checkpoint_dir
+            )
         
         # Initialize optimizer with different learning rates
         self.optimizer = torch.optim.Adam([
@@ -75,6 +85,26 @@ class GaussianSplatTrainer:
         # Create checkpoint directory
         if self.is_main_process():
             Path(config.training.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+            
+        # Synchronize model parameters across GPUs
+        if isinstance(model, DistributedDataParallel):
+            self._sync_model_params()
+        
+    def _sync_model_params(self):
+        """Synchronize model parameters across GPUs"""
+        for param in self.model.parameters():
+            if param.requires_grad:
+                dist.broadcast(param.data, 0)
+                
+    def _reduce_tensor(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Reduce tensor across all GPUs"""
+        if not isinstance(self.model, DistributedDataParallel):
+            return tensor
+            
+        rt = tensor.clone()
+        dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+        rt /= dist.get_world_size()
+        return rt
         
     def train(self, start_epoch: int = 0) -> None:
         """
@@ -106,43 +136,37 @@ class GaussianSplatTrainer:
                 self.save_checkpoint(epoch, train_loss)
                 
     def train_epoch(self, epoch: int) -> float:
-        """
-        Train for one epoch.
-        
-        Args:
-            epoch (int): Current epoch number
-            
-        Returns:
-            float: Average training loss
-        """
+        """Train for one epoch"""
         self.model.train()
-        total_loss = 0
+        total_loss = 0.0
         
-        if hasattr(self.train_loader.sampler, 'set_epoch'):
-            self.train_loader.sampler.set_epoch(epoch)
-        
-        pbar = tqdm(
-            self.train_loader,
-            desc=f"Epoch {epoch}",
-            disable=not self.is_main_process()
-        )
-        
-        for batch_idx, batch in enumerate(pbar):
+        for batch_idx, batch in enumerate(self.train_loader):
+            self.optimizer.zero_grad()
+            
             # Move data to device
             images = batch['image'].to(self.device)
             camera_poses = batch['camera_pose'].to(self.device)
             
             # Forward pass
-            self.optimizer.zero_grad()
-            predictions = self.model(camera_poses, images.shape[-2:])
+            outputs = self.model(camera_poses, images.shape[-2:])
             
             # Compute loss
             loss_dict = self.criterion(
-                {'rgb': predictions},
-                {'rgb': images},
-                gaussian_params={
-                    'opacity': self.model.module.opacity if isinstance(self.model, DistributedDataParallel)
-                    else self.model.opacity
+                {
+                    'rgb': outputs['rendered_images'],
+                    'depth': outputs['depths'],
+                    'normals': None  # Add if available
+                },
+                {
+                    'rgb': images,
+                    'depth': batch.get('depth'),
+                    'normals': batch.get('normals')
+                },
+                {
+                    'opacity': outputs['opacity'],
+                    'features': outputs['features'],
+                    'positions': outputs['positions'],
+                    'scales': outputs['scales']
                 }
             )
             
@@ -150,15 +174,43 @@ class GaussianSplatTrainer:
             
             # Backward pass
             loss.backward()
+            
+            # Gradient clipping
+            if self.config.training.optimization.max_grad_norm > 0:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.config.training.optimization.max_grad_norm
+                )
+            
             self.optimizer.step()
             
-            # Update progress bar
+            # Update metrics
             total_loss += loss.item()
-            pbar.set_postfix({'loss': loss.item()})
             
-            # Log metrics
-            if self.is_main_process() and batch_idx % self.config.logging.log_interval == 0:
-                self._log_metrics(loss_dict, epoch, batch_idx)
+            # Log progress
+            if batch_idx % self.config.logging.log_interval == 0:
+                self.logger.info(
+                    f'Train Epoch: {epoch} [{batch_idx}/{len(self.train_loader)} '
+                    f'({100. * batch_idx / len(self.train_loader):.0f}%)]\t'
+                    f'Loss: {loss.item():.6f}'
+                )
+                
+                # Log to wandb
+                if self.config.logging.wandb_project and self.is_main_process():
+                    wandb.log({
+                        'epoch': epoch,
+                        'train_loss': loss.item(),
+                        'train_rgb_loss': loss_dict['rgb_loss'].item(),
+                        'train_depth_loss': loss_dict.get('depth_loss', 0.0),
+                        'train_normal_loss': loss_dict.get('normal_loss', 0.0),
+                        'train_opacity_loss': loss_dict.get('opacity_loss', 0.0),
+                        'learning_rate': self.optimizer.param_groups[0]['lr']
+                    })
+            
+            # Clear GPU memory if needed
+            if self.config.training.optimization.empty_cache_freq > 0 and \
+               batch_idx % self.config.training.optimization.empty_cache_freq == 0:
+                torch.cuda.empty_cache()
         
         return total_loss / len(self.train_loader)
         
@@ -180,10 +232,20 @@ class GaussianSplatTrainer:
             self.device
         )
         
+        # Reduce metrics across GPUs
+        if isinstance(self.model, DistributedDataParallel):
+            reduced_metrics = {
+                k: self._reduce_tensor(torch.tensor(v, device=self.device)).item()
+                if isinstance(v, (float, int)) else v
+                for k, v in metrics.items()
+            }
+        else:
+            reduced_metrics = metrics
+        
         if self.is_main_process():
-            self._log_metrics(metrics, epoch, prefix='val_')
+            self._log_metrics(reduced_metrics, epoch, prefix='val_')
             
-        return metrics.get('total_loss', 0.0), metrics
+        return reduced_metrics.get('total_loss', 0.0), reduced_metrics
         
     def save_checkpoint(
         self,
@@ -240,7 +302,7 @@ class GaussianSplatTrainer:
         return checkpoint['epoch'] + 1
         
     def is_main_process(self) -> bool:
-        """Check if this is the main process"""
+        """Check if this is the main process (rank 0)"""
         return self.rank == 0
         
     def _log_metrics(
@@ -261,7 +323,7 @@ class GaussianSplatTrainer:
             log_dict['batch'] = batch_idx
             
         # Log to wandb
-        if self.config.logging.wandb_project:
+        if self.config.logging.wandb_project and self.is_main_process():
             wandb.log(log_dict)
             
         # Log to console

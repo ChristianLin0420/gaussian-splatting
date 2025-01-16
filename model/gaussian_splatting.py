@@ -1,13 +1,16 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple
+from typing import Tuple, Dict
 import numpy as np
 
 class GaussianSplat(nn.Module):
-    def __init__(self, num_gaussians=100000):
+    def __init__(self, num_gaussians=100000, use_gradient_checkpointing=False, memory_efficient=False, chunk_size=500):
         super().__init__()
         self.num_gaussians = num_gaussians
+        self.use_gradient_checkpointing = use_gradient_checkpointing
+        self.memory_efficient = memory_efficient
+        self.chunk_size = chunk_size
         
         # Learnable parameters for each Gaussian
         self.positions = nn.Parameter(torch.randn(num_gaussians, 3))  # 3D positions
@@ -43,7 +46,70 @@ class GaussianSplat(nn.Module):
         with torch.no_grad():
             self.rotations.data = F.normalize(self.rotations.data, dim=1)
     
-    def forward(self, camera_poses: torch.Tensor, image_size: Tuple[int, int]) -> torch.Tensor:
+    def _render_chunk(self, positions_2d, scales_2d, features, opacity, sorted_indices, image_size, chunk_size=1000):
+        """Render Gaussians in chunks to save memory"""
+        batch_size = positions_2d.shape[0]
+        H, W = image_size
+        
+        # Initialize output image
+        rendered_images = torch.zeros(batch_size, 3, H, W, device=positions_2d.device)
+        accumulated_alpha = torch.zeros(batch_size, 1, H, W, device=positions_2d.device)
+        
+        # Create coordinate grid
+        y, x = torch.meshgrid(
+            torch.linspace(-1, 1, H, device=positions_2d.device),
+            torch.linspace(-1, 1, W, device=positions_2d.device),
+            indexing='ij'
+        )
+        grid = torch.stack([x, y], dim=-1)  # (H, W, 2)
+        
+        # Process Gaussians in chunks
+        for start_idx in range(0, len(sorted_indices), chunk_size):
+            end_idx = min(start_idx + chunk_size, len(sorted_indices))
+            chunk_indices = sorted_indices[start_idx:end_idx]
+            
+            pos = positions_2d[:, chunk_indices]  # (B, chunk_size, 2)
+            scale = scales_2d[:, chunk_indices]   # (B, chunk_size, 2, 2)
+            color = features[chunk_indices]       # (chunk_size, 3)
+            alpha = opacity[chunk_indices]        # (chunk_size, 1)
+            
+            # Compute Gaussian values for each position in the chunk
+            for i in range(len(chunk_indices)):
+                # Get current position and scale
+                curr_pos = pos[:, i:i+1, :]  # (B, 1, 2)
+                curr_scale = scale[:, i]      # (B, 2, 2)
+                
+                # Compute difference between grid points and current position
+                diff = grid.view(1, H * W, 2) - curr_pos.view(batch_size, 1, 2)  # (B, H*W, 2)
+                
+                # Compute Mahalanobis distance
+                cov_inv = torch.inverse(curr_scale)  # (B, 2, 2)
+                mahalanobis = torch.sum(
+                    (diff @ cov_inv.unsqueeze(1)) * diff,
+                    dim=-1
+                ).view(batch_size, H, W)  # (B, H, W)
+                
+                # Compute Gaussian values
+                gaussian = torch.exp(-0.5 * mahalanobis)  # (B, H, W)
+                
+                # Alpha compositing
+                alpha_mask = (gaussian * alpha[i]).unsqueeze(1)  # (B, 1, H, W)
+                color_mask = color[i].view(1, 3, 1, 1) * alpha_mask
+                
+                rendered_images = rendered_images + (1 - accumulated_alpha) * color_mask
+                accumulated_alpha = accumulated_alpha + (1 - accumulated_alpha) * alpha_mask
+                
+                # Early stopping if accumulated alpha is close to 1
+                if torch.all(accumulated_alpha > 0.99):
+                    return rendered_images
+                
+                # Clear GPU memory if needed
+                if self.memory_efficient:
+                    torch.cuda.empty_cache()
+        
+        return rendered_images
+        
+    def forward(self, camera_poses: torch.Tensor, image_size: Tuple[int, int]) -> Dict[str, torch.Tensor]:
         """
         Forward pass of the Gaussian Splatting model
         
@@ -52,8 +118,26 @@ class GaussianSplat(nn.Module):
             image_size (tuple): (H, W) output image size
             
         Returns:
-            torch.Tensor: Rendered images (B, 3, H, W)
+            Dict[str, torch.Tensor]: Dictionary containing:
+                - 'rendered_images': Rendered images (B, 3, H, W)
+                - 'positions': Projected 2D positions
+                - 'depths': Depth values
+                - 'scales': Projected 2D scales
+                - 'features': RGB features
+                - 'opacity': Opacity values
         """
+        if self.use_gradient_checkpointing:
+            return torch.utils.checkpoint.checkpoint(
+                self._forward_impl,
+                camera_poses,
+                image_size,
+                preserve_rng_state=False
+            )
+        else:
+            return self._forward_impl(camera_poses, image_size)
+            
+    def _forward_impl(self, camera_poses: torch.Tensor, image_size: Tuple[int, int]) -> Dict[str, torch.Tensor]:
+        """Implementation of forward pass with optional memory optimizations"""
         batch_size = camera_poses.shape[0]
         H, W = image_size
         
@@ -64,17 +148,26 @@ class GaussianSplat(nn.Module):
         # Sort Gaussians by depth for proper alpha compositing
         sorted_indices = torch.argsort(depths, dim=1, descending=True)  # Back to front
         
-        # Render Gaussians
-        rendered_images = self._render_gaussians(
+        # Render Gaussians with memory optimization
+        rendered_images = self._render_chunk(
             positions_2d,
             scales_2d,
             self.features,
             self.opacity,
-            sorted_indices,
-            (H, W)
+            sorted_indices[0],  # Use first batch for sorting
+            (H, W),
+            chunk_size=self.chunk_size if hasattr(self, 'chunk_size') else 500
         )
         
-        return rendered_images
+        # Return all intermediate results to ensure gradient flow
+        return {
+            'rendered_images': rendered_images,
+            'positions': positions_2d,
+            'depths': depths,
+            'scales': scales_2d,
+            'features': self.features,
+            'opacity': self.opacity
+        }
     
     def _project_positions(self, camera_poses: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Project 3D positions to 2D image coordinates"""
@@ -152,63 +245,6 @@ class GaussianSplat(nn.Module):
         J[:, :, 1, 2] = -fy * self.positions[:, 1] / (z * z)
         
         return J
-    
-    def _render_gaussians(
-        self, 
-        positions_2d: torch.Tensor,
-        scales_2d: torch.Tensor,
-        features: torch.Tensor,
-        opacity: torch.Tensor,
-        sorted_indices: torch.Tensor,
-        image_size: Tuple[int, int]
-    ) -> torch.Tensor:
-        """Render 2D Gaussians using alpha compositing"""
-        batch_size = positions_2d.shape[0]
-        H, W = image_size
-        
-        # Initialize output image
-        rendered_images = torch.zeros(batch_size, 3, H, W, device=positions_2d.device)
-        accumulated_alpha = torch.zeros(batch_size, 1, H, W, device=positions_2d.device)
-        
-        # Create coordinate grid
-        y, x = torch.meshgrid(
-            torch.linspace(-1, 1, H, device=positions_2d.device),
-            torch.linspace(-1, 1, W, device=positions_2d.device)
-        )
-        grid = torch.stack([x, y], dim=-1)  # (H, W, 2)
-        
-        # Render Gaussians back to front
-        for idx in sorted_indices.transpose(0, 1):  # Process each depth level
-            pos = positions_2d[:, idx]  # (B, 2)
-            scale = scales_2d[:, idx]   # (B, 2, 2)
-            color = features[idx]       # (3,)
-            alpha = opacity[idx]        # (1,)
-            
-            # Compute Gaussian values
-            diff = (grid.unsqueeze(0) - pos.unsqueeze(1).unsqueeze(1))  # (B, H, W, 2)
-            cov_inv = torch.inverse(scale)  # (B, 2, 2)
-            
-            # Compute Mahalanobis distance
-            mahalanobis = torch.sum(
-                diff.unsqueeze(-2) @ cov_inv.unsqueeze(1).unsqueeze(1) @ diff.unsqueeze(-1),
-                dim=(-2, -1)
-            )  # (B, H, W)
-            
-            # Compute Gaussian values
-            gaussian = torch.exp(-0.5 * mahalanobis)  # (B, H, W)
-            
-            # Alpha compositing
-            alpha_mask = (gaussian * alpha).unsqueeze(1)  # (B, 1, H, W)
-            color_mask = color.view(1, 3, 1, 1) * alpha_mask
-            
-            rendered_images = rendered_images + (1 - accumulated_alpha) * color_mask
-            accumulated_alpha = accumulated_alpha + (1 - accumulated_alpha) * alpha_mask
-            
-            # Early stopping if accumulated alpha is close to 1
-            if torch.all(accumulated_alpha > 0.99):
-                break
-        
-        return rendered_images 
     
     def prune_gaussians(self, threshold: float = 0.01) -> None:
         """

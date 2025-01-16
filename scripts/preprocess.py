@@ -2,84 +2,53 @@ import hydra
 from omegaconf import DictConfig
 from pathlib import Path
 from tqdm import tqdm
-import logging
-import shutil
 from typing import List
+import json
 
-from ..data_processing.preprocessor import ScenePreprocessor
-from ..utils.logger import setup_logger
+from data_processing.preprocessor import ScenePreprocessor
+from utils.logger import setup_logger
 
-@hydra.main(config_path="../configs", config_name="default_config")
-def preprocess(config: DictConfig):
+@hydra.main(version_base=None, config_path="../configs", config_name="default_config")
+def preprocess(config: DictConfig) -> None:
     """
     Preprocess raw scene data for training.
     
     Args:
         config (DictConfig): Hydra configuration
     """
+    print("Starting preprocessing...")  # Debug print
     logger = setup_logger(__name__)
     
     try:
         # Initialize preprocessor
         preprocessor = ScenePreprocessor(config)
         
-        # Get all scene directories
-        data_root = Path(config.data.dataset_path)
-        if not data_root.exists():
-            raise FileNotFoundError(f"Data root not found at {data_root}")
+        # Get scene directory
+        scene_dir = Path(config.data.dataset_path)
+        if not scene_dir.exists():
+            raise FileNotFoundError(f"Scene directory not found at {scene_dir}")
             
-        scene_dirs = [d for d in data_root.iterdir() if d.is_dir() and d.name != 'processed']
-        logger.info(f"Found {len(scene_dirs)} scenes to process")
-        
         # Create output directory
-        output_root = data_root / "processed"
-        output_root.mkdir(parents=True, exist_ok=True)
+        output_dir = scene_dir / "processed"
+        output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Process each scene
-        failed_scenes = []
-        for scene_dir in tqdm(scene_dirs, desc="Processing scenes"):
-            try:
-                logger.info(f"Processing scene: {scene_dir.name}")
-                
-                # Check for required files
-                if not _validate_scene_directory(scene_dir):
-                    logger.warning(f"Skipping {scene_dir.name}: Missing required files")
-                    failed_scenes.append((scene_dir.name, "Missing required files"))
-                    continue
-                
-                # Process scene
-                output_dir = output_root / scene_dir.name
-                preprocessor.process_scene(scene_dir, output_dir)
-                
-                logger.info(f"Scene {scene_dir.name} processed successfully")
-                
-            except Exception as e:
-                logger.error(f"Failed to process scene {scene_dir.name}: {str(e)}")
-                failed_scenes.append((scene_dir.name, str(e)))
-                
-                if config.preprocessing.stop_on_error:
-                    raise
-        
-        # Report results
-        total_scenes = len(scene_dirs)
-        successful_scenes = total_scenes - len(failed_scenes)
-        logger.info(f"\nPreprocessing completed:")
-        logger.info(f"Total scenes: {total_scenes}")
-        logger.info(f"Successful: {successful_scenes}")
-        logger.info(f"Failed: {len(failed_scenes)}")
-        
-        if failed_scenes:
-            logger.warning("\nFailed scenes:")
-            for scene_name, error in failed_scenes:
-                logger.warning(f"- {scene_name}: {error}")
-                
-        # Save preprocessing report
-        _save_preprocessing_report(
-            output_root / "preprocessing_report.json",
-            total_scenes,
-            successful_scenes,
-            failed_scenes
-        )
+        # Process scene
+        try:
+            logger.info(f"Processing scene: {scene_dir.name}")
+            
+            # Check for required files
+            if not _validate_scene_directory(scene_dir):
+                logger.error(f"Scene directory {scene_dir} is missing required files")
+                return
+            
+            # Process scene
+            preprocessor.process_scene(scene_dir, output_dir)
+            
+            logger.info(f"Scene processed successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to process scene: {str(e)}")
+            raise
         
     except Exception as e:
         logger.error(f"Preprocessing failed: {str(e)}")
@@ -87,20 +56,41 @@ def preprocess(config: DictConfig):
 
 def _validate_scene_directory(scene_dir: Path) -> bool:
     """
-    Validate that a scene directory contains required files.
+    Check if scene directory contains required files and folders.
     
     Args:
         scene_dir (Path): Path to scene directory
         
     Returns:
-        bool: True if directory contains required files
+        bool: True if directory contains all required files and folders
     """
-    required_files = [
-        scene_dir / "images",
-        scene_dir / "metadata.json"
+    # Required folders and files
+    required_paths = [
+        scene_dir / 'rgb',  # RGB images directory
+        scene_dir / 'pose',  # Camera pose directory
+        scene_dir / 'bbox.txt',  # Bounding box information
+        scene_dir / 'intrinsics.txt'  # Camera intrinsics
     ]
     
-    return all(f.exists() for f in required_files)
+    # Check if all required paths exist
+    if not all(path.exists() for path in required_paths):
+        print(f"Scene directory {scene_dir} is missing required files")
+        return False
+        
+    # Check if rgb directory contains images
+    rgb_files = list((scene_dir / 'rgb').glob('*.jpg')) + list((scene_dir / 'rgb').glob('*.png'))
+    if not rgb_files:
+        print(f"Scene directory {scene_dir} is missing images")
+        return False
+        
+    # Check if pose directory contains pose files
+    pose_files = list((scene_dir / 'pose').glob('*.txt'))
+    if not pose_files:
+        print(f"Scene directory {scene_dir} is missing pose files")
+        return False
+        
+    print(f"Scene directory {scene_dir} is valid")
+    return True
 
 def _save_preprocessing_report(
     output_path: Path,
@@ -113,15 +103,11 @@ def _save_preprocessing_report(
     
     Args:
         output_path (Path): Path to save report
-        total_scenes (int): Total number of scenes
+        total_scenes (int): Total number of scenes processed
         successful_scenes (int): Number of successfully processed scenes
-        failed_scenes (List[tuple]): List of (scene_name, error) tuples
+        failed_scenes (List[tuple]): List of (scene_name, error) tuples for failed scenes
     """
-    import json
-    from datetime import datetime
-    
     report = {
-        'timestamp': datetime.now().isoformat(),
         'total_scenes': total_scenes,
         'successful_scenes': successful_scenes,
         'failed_scenes': len(failed_scenes),
@@ -132,7 +118,7 @@ def _save_preprocessing_report(
     }
     
     with open(output_path, 'w') as f:
-        json.dump(report, f, indent=2)
+        json.dump(report, f, indent=4)
 
 if __name__ == "__main__":
     preprocess() 

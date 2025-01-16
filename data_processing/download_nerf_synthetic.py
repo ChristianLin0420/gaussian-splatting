@@ -6,9 +6,9 @@ import shutil
 import argparse
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
-def download_dataset(output_dir: Path, scenes: Optional[list[str]] = None) -> None:
+def download_dataset(output_dir: Path, scenes: Optional[List[str]] = None) -> None:
     """Download the Synthetic NeRF dataset."""
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)

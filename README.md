@@ -65,10 +65,10 @@ The Synthetic-NeRF dataset is the standard benchmark dataset for neural scene re
 1. Use the provided script to download and prepare the dataset:
 ```bash
 # Download all scenes
-python scripts/download_nerf_synthetic.py --output-dir data/nerf_synthetic
+python data_processing/download_nerf_synthetic.py --output-dir data/nerf_synthetic
 
 # Download specific scenes
-python scripts/download_nerf_synthetic.py --output-dir data/nerf_synthetic --scenes lego chair drums
+python data_processing/download_nerf_synthetic.py --output-dir data/nerf_synthetic --scenes lego chair drums
 ```
 
 2. Dataset Structure:
@@ -115,22 +115,22 @@ The project provides a unified command-line interface for all operations:
 
 ```bash
 # Show help
-python -m gaussian_splatting --help
+python main.py --help
 
 # Preprocess data
-python -m gaussian_splatting preprocess --config configs/my_config.yaml
+python main.py preprocess --config configs/default_config.yaml
 
 # Train model
-python -m gaussian_splatting train --config configs/my_config.yaml
+python main.py train --config configs/default_config.yaml
 
 # Resume training
-python -m gaussian_splatting train --config configs/my_config.yaml --resume
+python main.py train --config configs/default_config.yaml --resume
 
 # Evaluate model
-python -m gaussian_splatting evaluate --config configs/my_config.yaml --checkpoint path/to/checkpoint.pt
+python main.py evaluate --config configs/default_config.yaml --checkpoint path/to/checkpoint.pt
 
 # Deploy model
-python -m gaussian_splatting deploy --config configs/my_config.yaml --checkpoint path/to/checkpoint.pt
+python main.py deploy --config configs/default_config.yaml --checkpoint path/to/checkpoint.pt
 ```
 
 ### Training
@@ -139,10 +139,26 @@ Start training on a specific scene:
 
 ```bash
 # Train on Lego scene
-python -m gaussian_splatting train --config configs/nerf_synthetic.yaml --scene lego
+python main.py train --config configs/default_config.yaml --scene lego
 
 # Train with multiple GPUs
-python -m gaussian_splatting train --config configs/nerf_synthetic.yaml --scene lego --gpu 0,1
+python main.py train --config configs/default_config.yaml --scene lego --gpu 0,1
+
+# Resume training from checkpoint
+python main.py train --config configs/default_config.yaml --resume path/to/checkpoint.pt
+
+# Train with custom wandb run name
+python main.py train --config configs/default_config.yaml --scene lego --wandb-name "lego-experiment-v1"
+```
+
+Wandb configuration can be specified either:
+1. Via command line using `--wandb-name`
+2. In the config file under the logging section:
+```yaml
+logging:
+  wandb_project: "gaussian_splatting"  # Weights & Biases project name
+  wandb_name: "lego-experiment"  # Default run name (can be overridden by --wandb-name)
+  log_interval: 100  # Steps between logging
 ```
 
 ### Evaluation
@@ -150,15 +166,71 @@ python -m gaussian_splatting train --config configs/nerf_synthetic.yaml --scene 
 Evaluate model performance:
 
 ```bash
-python -m gaussian_splatting evaluate --checkpoint path/to/model.pt
+# Basic evaluation
+python main.py evaluate --checkpoint path/to/model.pt
+
+# Evaluate with specific metrics
+python main.py evaluate --checkpoint path/to/model.pt --metrics psnr ssim lpips
+
+# Save evaluation results
+python main.py evaluate --checkpoint path/to/model.pt --output-dir results/evaluation
 ```
+
+### Visualization
+
+Create visualizations of trained models:
+
+```bash
+# Basic visualization
+python main.py visualize --checkpoint path/to/model.pt
+
+# Customize visualization parameters
+python main.py visualize \
+    --checkpoint path/to/model.pt \
+    --output-dir outputs/visualizations \
+    --image-size 1024 1024 \
+    --orbit-radius 4.0 \
+    --n-views 60 \
+    --elevation 45.0 \
+    --fps 60 \
+    --format mp4
+
+# Create GIF animation
+python main.py visualize \
+    --checkpoint path/to/model.pt \
+    --format gif
+```
+
+The visualization tool generates:
+- A grid of 8 views from different angles (`orbit_views.png`)
+- An orbit animation (`orbit_animation.mp4` or `orbit_animation.gif`)
+- All outputs are saved in the specified output directory
+
+Available visualization options:
+- `--checkpoint`: Path to model checkpoint (required)
+- `--output-dir`: Output directory for visualizations (default: "visualizations")
+- `--image-size`: Output image size as height width (default: 800 800)
+- `--orbit-radius`: Radius for orbit camera path (default: 3.0)
+- `--n-views`: Number of views in orbit animation (default: 30)
+- `--elevation`: Camera elevation angle in degrees (default: 30.0)
+- `--fps`: Frames per second for animation (default: 30)
+- `--format`: Animation format, either "mp4" or "gif" (default: "mp4")
+- `--device`: Device to run model on (default: "cuda")
 
 ### Deployment
 
 Deploy model with TensorRT optimization:
 
 ```bash
-python -m gaussian_splatting deploy --checkpoint path/to/model.pt
+# Basic deployment
+python main.py deploy --checkpoint path/to/model.pt
+
+# Deploy with custom settings
+python main.py deploy \
+    --checkpoint path/to/model.pt \
+    --port 8080 \
+    --host 0.0.0.0 \
+    --batch-size 4
 ```
 
 ## Testing

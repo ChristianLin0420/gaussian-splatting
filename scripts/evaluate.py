@@ -7,12 +7,12 @@ import wandb
 from typing import Optional
 import json
 
-from ..data_processing.dataset import SceneDataset
-from ..model.gaussian_splatting import GaussianSplat
-from ..model.evaluation import GaussianSplatEvaluator
-from ..utils.logger import setup_logger
+from data_processing.dataset import SceneDataset
+from model.gaussian_splatting import GaussianSplat
+from model.evaluation import GaussianSplatEvaluator
+from utils.logger import setup_logger
 
-@hydra.main(config_path="../configs", config_name="default_config")
+@hydra.main(version_base=None, config_path="../configs", config_name="default_config")
 def evaluate(config: DictConfig, checkpoint_path: Optional[str] = None):
     """
     Evaluate Gaussian Splatting model.
