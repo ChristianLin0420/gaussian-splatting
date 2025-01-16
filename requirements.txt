@@ -1,0 +1,40 @@
+# Deep Learning Framework
+torch
+torchvision
+
+# Neural Rendering
+pytorch3d
+open3d
+
+# Image Processing
+opencv-python
+pillow
+scikit-image
+lpips  # Learned Perceptual Image Patch Similarity
+
+# Scientific Computing
+numpy
+scipy
+
+# Machine Learning Utilities
+wandb  # Weights & Biases for experiment tracking
+tensorboard
+
+# Deployment
+fastapi
+uvicorn
+python-multipart
+pydantic
+
+# TensorRT Integration
+tensorrt
+torch2trt
+
+# Utilities
+tqdm
+pyyaml
+matplotlib
+plotly
+
+# Optional: CUDA Support (uncomment if needed)
+# cupy-cuda11x  # Replace 11x with your CUDA version
