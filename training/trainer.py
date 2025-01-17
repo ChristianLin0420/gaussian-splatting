@@ -258,7 +258,8 @@ class GaussianSplatTrainer:
         }
         
         # Save regular checkpoint
-        checkpoint_path = Path(self.config.training.checkpoint_dir)
+        checkpoint_path = Path(self.config.training.checkpoint_dir) / self.config.logging.wandb_name
+        checkpoint_path.mkdir(parents=True, exist_ok=True)
         checkpoint_file = checkpoint_path / f"checkpoint_{epoch:04d}.pt"
         torch.save(checkpoint, checkpoint_file)
         
