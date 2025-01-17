@@ -7,85 +7,64 @@ import lpips
 from typing import Dict, List, Optional, Tuple
 import logging
 from tqdm import tqdm
+from collections import defaultdict
 
 class GaussianSplatEvaluator:
-    """Evaluator for Gaussian Splatting model performance"""
+    """Evaluator for Gaussian Splatting model"""
     
-    def __init__(self, config):
+    def __init__(self, config: Dict):
         """
-        Initialize evaluator with metrics.
+        Initialize evaluator.
         
         Args:
-            config: Configuration object containing evaluation settings
+            config: Configuration dictionary
         """
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.metrics = defaultdict(list)
         
-        # Initialize LPIPS for perceptual similarity
-        self.lpips_model = lpips.LPIPS(net='vgg').cuda()
+        # Initialize LPIPS model
+        self.lpips_model = lpips.LPIPS(net='vgg')
         self.lpips_model.eval()
-        
-        # Initialize metric trackers
-        self.reset_metrics()
-        
-    def reset_metrics(self) -> None:
-        """Reset all metric trackers"""
-        self.metrics = {
-            'psnr': [],
-            'ssim': [],
-            'lpips': [],
-            'depth_rmse': [],
-            'normal_consistency': []
-        }
-        
+        for param in self.lpips_model.parameters():
+            param.requires_grad = False
+    
     def evaluate(
         self,
-        model: nn.Module,
+        model: torch.nn.Module,
         dataloader: torch.utils.data.DataLoader,
-        device: torch.device,
-        save_visualizations: bool = False,
-        output_dir: Optional[str] = None
+        device: torch.device
     ) -> Dict[str, float]:
         """
-        Evaluate model on the given dataloader.
+        Evaluate model on dataset.
         
         Args:
-            model (nn.Module): The Gaussian Splatting model
-            dataloader (DataLoader): Validation/Test dataloader
-            device (torch.device): Device to run evaluation on
-            save_visualizations (bool): Whether to save visualization results
-            output_dir (str, optional): Directory to save visualizations
+            model: Model to evaluate
+            dataloader: Dataset to evaluate on
+            device: Device to evaluate on
             
         Returns:
-            Dict[str, float]: Dictionary containing evaluation metrics
+            Dictionary of evaluation metrics
         """
         model.eval()
-        self.reset_metrics()
+        self.metrics.clear()
+        self.lpips_model = self.lpips_model.to(device)  # Move LPIPS model to correct device
         
         with torch.no_grad():
-            for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating")):
-                # Move data to device
+            for batch in tqdm(dataloader, desc="Evaluating"):
+                # Move batch to device
                 images = batch['image'].to(device)
                 camera_poses = batch['camera_pose'].to(device)
                 
-                # Generate predictions
+                # Forward pass
                 predictions = model(camera_poses, images.shape[-2:])
                 
-                # Calculate metrics
-                self._compute_batch_metrics(predictions, images)
-                
-                # Save visualizations
-                if save_visualizations and output_dir:
-                    self._save_visualizations(
-                        predictions,
-                        images,
-                        batch['image_path'],
-                        output_dir,
-                        batch_idx
-                    )
+                # Compute metrics
+                self._compute_batch_metrics(predictions['rendered_images'], images)
         
-        # Compute final metrics
-        return self._compute_final_metrics()
+        # Compute average metrics
+        return {
+            k: float(np.mean(v)) for k, v in self.metrics.items()
+        }
         
     def _compute_batch_metrics(
         self,
@@ -103,6 +82,10 @@ class GaussianSplatEvaluator:
         pred_np = predictions.cpu().numpy()
         target_np = targets.cpu().numpy()
         
+        # Get image size and determine appropriate window size for SSIM
+        _, _, H, W = predictions.shape
+        win_size = min(7, min(H, W) - (min(H, W) % 2) + 1)  # Ensure odd window size that fits the image
+        
         # Compute metrics for each image
         for i in range(len(predictions)):
             # PSNR
@@ -110,12 +93,13 @@ class GaussianSplatEvaluator:
                 psnr(target_np[i], pred_np[i], data_range=1.0)
             )
             
-            # SSIM
+            # SSIM with adjusted window size
             self.metrics['ssim'].append(
                 ssim(
-                    target_np[i].transpose(1, 2, 0),
-                    pred_np[i].transpose(1, 2, 0),
-                    multichannel=True,
+                    target_np[i].transpose(1, 2, 0),  # Change to HWC format
+                    pred_np[i].transpose(1, 2, 0),    # Change to HWC format
+                    win_size=win_size,                # Use computed window size
+                    channel_axis=2,                   # Specify channel axis
                     data_range=1.0
                 )
             )
@@ -123,68 +107,6 @@ class GaussianSplatEvaluator:
             # LPIPS
             self.metrics['lpips'].append(
                 self.lpips_model(predictions[i:i+1], targets[i:i+1]).item()
-            )
-            
-    def _compute_final_metrics(self) -> Dict[str, float]:
-        """
-        Compute final metrics from accumulated values.
-        
-        Returns:
-            Dict[str, float]: Dictionary of averaged metrics
-        """
-        final_metrics = {}
-        
-        # Compute mean for each metric
-        for metric_name, values in self.metrics.items():
-            if values:  # Only compute if we have values
-                mean_value = np.mean(values)
-                std_value = np.std(values)
-                
-                final_metrics[f"{metric_name}_mean"] = mean_value
-                final_metrics[f"{metric_name}_std"] = std_value
-                
-                self.logger.info(
-                    f"{metric_name.upper()}: {mean_value:.4f} ± {std_value:.4f}"
-                )
-        
-        return final_metrics
-        
-    def _save_visualizations(
-        self,
-        predictions: torch.Tensor,
-        targets: torch.Tensor,
-        image_paths: List[str],
-        output_dir: str,
-        batch_idx: int
-    ) -> None:
-        """
-        Save visualization of predictions vs targets.
-        
-        Args:
-            predictions (torch.Tensor): Model predictions
-            targets (torch.Tensor): Ground truth images
-            image_paths (List[str]): Original image paths
-            output_dir (str): Directory to save visualizations
-            batch_idx (int): Batch index
-        """
-        from torchvision.utils import save_image
-        import os
-        
-        os.makedirs(output_dir, exist_ok=True)
-        
-        for i, (pred, target, img_path) in enumerate(zip(predictions, targets, image_paths)):
-            # Create comparison grid
-            comparison = torch.stack([target, pred])
-            
-            # Save image
-            save_image(
-                comparison,
-                os.path.join(
-                    output_dir,
-                    f"comparison_{batch_idx}_{i}.png"
-                ),
-                nrow=2,
-                normalize=True
             )
             
     def evaluate_depth(

@@ -4,30 +4,30 @@ data:
   train_split: 0.8
   val_split: 0.1
   test_split: 0.1
-  image_size: [200, 150]
+  image_size: [100, 75]
   
 # Model Configuration
 model:
-  num_gaussians: 10000
-  position_lr: 0.001
-  feature_lr: 0.01
-  scale_lr: 0.001
-  rotation_lr: 0.001
-  opacity_lr: 0.01
-  use_gradient_checkpointing: true
+  num_gaussians: 4500
+  position_lr: 0.0001
+  feature_lr: 0.001
+  scale_lr: 0.0001
+  rotation_lr: 0.0001
+  opacity_lr: 0.001
+  use_gradient_checkpointing: false
   memory_efficient: true
-  chunk_size: 500
+  chunk_size: 10
 
 # Loss Configuration
 loss:
   rgb_weight: 1.0
-  depth_weight: 0.1
-  normal_weight: 0.01
-  opacity_weight: 0.01
-  scale_weight: 0.001
-  rotation_weight: 0.001
-  perceptual_weight: 0.1
-  tv_weight: 0.01
+  depth_weight: 0.05
+  normal_weight: 0.005
+  opacity_weight: 0.005
+  scale_weight: 0.0005
+  rotation_weight: 0.0005
+  perceptual_weight: 0.05
+  tv_weight: 0.005
 
 # Training Configuration
 training:
@@ -35,19 +35,25 @@ training:
   num_epochs: 100
   num_workers: 1
   checkpoint_dir: "checkpoints"
+  checkpoint_interval: 10
   resume_training: false
   checkpoint_path: null
   distributed:
     enabled: true
-    world_size: -1  # auto-detect
+    world_size: -1
     backend: "nccl"
     init_method: "env://"
     find_unused_parameters: true
   optimization:
     empty_cache_freq: 1
     backward_passes_per_step: 1
-    max_grad_norm: 1.0
-    max_split_size_mb: 512
+    max_grad_norm: 0.1
+    max_split_size_mb: 256
+    lr_warmup_epochs: 5
+    lr_scheduler:
+      type: "cosine"
+      T_max: 100
+      eta_min: 1e-6
   
 # Logging
 logging:

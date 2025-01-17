@@ -5,37 +5,42 @@ from torchvision.models import vgg16
 import lpips
 from typing import Dict, Optional, Tuple
 import logging
+import torchvision
 
 class GaussianSplatLoss(nn.Module):
-    """Combined loss function for Gaussian Splatting model"""
+    """Loss function for Gaussian Splatting model"""
     
-    def __init__(self, config):
+    def __init__(self, config: Dict):
         """
-        Initialize loss functions and weights.
+        Initialize loss function.
         
         Args:
-            config: Configuration object containing loss weights and settings
+            config: Dictionary containing loss configuration
         """
         super().__init__()
-        self.config = config
         self.logger = logging.getLogger(__name__)
         
-        # Initialize perceptual loss
-        self.lpips_loss = lpips.LPIPS(net='vgg').cuda()
+        # Initialize loss weights from config
+        self.rgb_weight = config.loss.rgb_weight
+        self.depth_weight = config.loss.depth_weight
+        self.normal_weight = config.loss.normal_weight
+        self.opacity_weight = config.loss.opacity_weight
+        self.scale_weight = config.loss.scale_weight
+        self.rotation_weight = config.loss.rotation_weight
+        self.perceptual_weight = config.loss.perceptual_weight
+        self.tv_weight = config.loss.tv_weight
         
-        # Initialize VGG for perceptual loss
-        vgg = vgg16(pretrained=True)
-        self.vgg_features = vgg.features[:23].eval()
+        # Initialize perceptual loss networks
+        self.vgg_features = torchvision.models.vgg16(pretrained=True).features.eval()
         for param in self.vgg_features.parameters():
             param.requires_grad = False
             
-        # Loss weights
-        self.rgb_weight = getattr(config.loss, 'rgb_weight', 1.0)
-        self.perceptual_weight = getattr(config.loss, 'perceptual_weight', 0.1)
-        self.lpips_weight = getattr(config.loss, 'lpips_weight', 0.1)
-        self.depth_weight = getattr(config.loss, 'depth_weight', 0.1)
-        self.normal_weight = getattr(config.loss, 'normal_weight', 0.1)
-        self.opacity_weight = getattr(config.loss, 'opacity_weight', 0.01)
+        # Initialize LPIPS loss
+        self.lpips_model = lpips.LPIPS(net='vgg')
+        self.lpips_model.eval()
+        for param in self.lpips_model.parameters():
+            param.requires_grad = False
+        self.lpips_weight = config.loss.perceptual_weight  # Use same weight as perceptual loss
         
     def forward(
         self,
@@ -56,62 +61,66 @@ class GaussianSplatLoss(nn.Module):
         """
         losses = {}
         
-        # RGB loss
-        losses['rgb_loss'] = self._compute_rgb_loss(
-            predictions['rgb'],
-            targets['rgb']
-        )
+        # RGB loss with stability check
+        rgb_loss = self._compute_rgb_loss(predictions['rgb'], targets['rgb'])
+        if torch.isfinite(rgb_loss):
+            losses['rgb_loss'] = rgb_loss
+        else:
+            self.logger.warning("RGB loss is nan/inf, using zero loss")
+            losses['rgb_loss'] = torch.tensor(0.0, device=rgb_loss.device, requires_grad=True)
         
-        # Perceptual loss
-        losses['perceptual_loss'] = self._compute_perceptual_loss(
-            predictions['rgb'],
-            targets['rgb']
-        )
+        # Perceptual loss with stability check
+        perceptual_loss = self._compute_perceptual_loss(predictions['rgb'], targets['rgb'])
+        if torch.isfinite(perceptual_loss):
+            losses['perceptual_loss'] = perceptual_loss
+        else:
+            self.logger.warning("Perceptual loss is nan/inf, using zero loss")
+            losses['perceptual_loss'] = torch.tensor(0.0, device=perceptual_loss.device, requires_grad=True)
         
-        # LPIPS loss
-        losses['lpips_loss'] = self._compute_lpips_loss(
-            predictions['rgb'],
-            targets['rgb']
-        )
+        # LPIPS loss with stability check
+        lpips_loss = self._compute_lpips_loss(predictions['rgb'], targets['rgb'])
+        if torch.isfinite(lpips_loss):
+            losses['lpips_loss'] = lpips_loss
+        else:
+            self.logger.warning("LPIPS loss is nan/inf, using zero loss")
+            losses['lpips_loss'] = torch.tensor(0.0, device=lpips_loss.device, requires_grad=True)
         
-        # Depth loss if available
-        if 'depth' in predictions and 'depth' in targets and targets['depth'] is not None:
-            losses['depth_loss'] = self._compute_depth_loss(
-                predictions['depth'],
-                targets['depth'],
-                targets.get('depth_mask')
-            )
-        
-        # Normal loss if available
-        if 'normals' in predictions and 'normals' in targets and targets['normals'] is not None:
-            losses['normal_loss'] = self._compute_normal_loss(
-                predictions['normals'],
-                targets['normals'],
-                targets.get('normal_mask')
-            )
-        
-        # Gaussian regularization if parameters provided
-        if gaussian_params is not None:
-            losses['opacity_loss'] = self._compute_opacity_regularization(
-                gaussian_params['opacity']
-            )
-        
-        # Compute total weighted loss
+        # Initialize total loss
         total_loss = (
             self.rgb_weight * losses['rgb_loss'] +
             self.perceptual_weight * losses['perceptual_loss'] +
             self.lpips_weight * losses['lpips_loss']
         )
         
-        if 'depth_loss' in losses:
-            total_loss += self.depth_weight * losses['depth_loss']
-        if 'normal_loss' in losses:
-            total_loss += self.normal_weight * losses['normal_loss']
-        if 'opacity_loss' in losses:
-            total_loss += self.opacity_weight * losses['opacity_loss']
+        # Add regularization losses if parameters provided
+        if gaussian_params is not None:
+            # Opacity regularization
+            if 'opacity' in gaussian_params:
+                opacity_loss = self._compute_opacity_regularization(gaussian_params['opacity'])
+                if torch.isfinite(opacity_loss):
+                    losses['opacity_loss'] = opacity_loss
+                    total_loss += self.opacity_weight * opacity_loss
+            
+            # Scale regularization
+            if 'scales' in gaussian_params:
+                scale_loss = torch.mean(torch.norm(gaussian_params['scales'], dim=-1))
+                if torch.isfinite(scale_loss):
+                    losses['scale_loss'] = scale_loss
+                    total_loss += self.scale_weight * scale_loss
+            
+            # Rotation regularization
+            if 'rotations' in gaussian_params:
+                rotation_loss = torch.mean(torch.norm(gaussian_params['rotations'], dim=-1))
+                if torch.isfinite(rotation_loss):
+                    losses['rotation_loss'] = rotation_loss
+                    total_loss += self.rotation_weight * rotation_loss
+        
+        # Final stability check
+        if not torch.isfinite(total_loss):
+            self.logger.warning("Total loss is nan/inf, resetting to zero")
+            total_loss = torch.tensor(0.0, device=total_loss.device, requires_grad=True)
         
         losses['total_loss'] = total_loss
-        
         return losses
         
     def _compute_rgb_loss(
@@ -120,15 +129,11 @@ class GaussianSplatLoss(nn.Module):
         targets: torch.Tensor
     ) -> torch.Tensor:
         """
-        Compute RGB reconstruction loss.
-        
-        Args:
-            predictions: Predicted images (B, 3, H, W)
-            targets: Target images (B, 3, H, W)
-            
-        Returns:
-            L2 loss between predictions and targets
+        Compute RGB reconstruction loss with stability checks.
         """
+        # Add small epsilon to prevent numerical instability
+        eps = 1e-8
+        predictions = torch.clamp(predictions, eps, 1.0 - eps)
         return F.mse_loss(predictions, targets)
         
     def _compute_perceptual_loss(
@@ -137,26 +142,24 @@ class GaussianSplatLoss(nn.Module):
         targets: torch.Tensor
     ) -> torch.Tensor:
         """
-        Compute perceptual loss using VGG features.
-        
-        Args:
-            predictions: Predicted images (B, 3, H, W)
-            targets: Target images (B, 3, H, W)
-            
-        Returns:
-            Perceptual loss value
+        Compute perceptual loss using VGG features with stability checks.
         """
-        # Normalize inputs
+        # Normalize inputs with stability
+        eps = 1e-8
         mean = torch.tensor([0.485, 0.456, 0.406], device=predictions.device).view(1, 3, 1, 1)
         std = torch.tensor([0.229, 0.224, 0.225], device=predictions.device).view(1, 3, 1, 1)
-        predictions = (predictions - mean) / std
-        targets = (targets - mean) / std
+        
+        predictions = torch.clamp(predictions, eps, 1.0 - eps)
+        targets = torch.clamp(targets, eps, 1.0 - eps)
+        
+        predictions = (predictions - mean) / (std + eps)
+        targets = (targets - mean) / (std + eps)
         
         # Extract features
+        with torch.no_grad():
+            target_features = self.vgg_features(targets)
         pred_features = self.vgg_features(predictions)
-        target_features = self.vgg_features(targets)
         
-        # Compute loss
         return F.mse_loss(pred_features, target_features)
         
     def _compute_depth_loss(
@@ -249,4 +252,4 @@ class GaussianSplatLoss(nn.Module):
         Returns:
             LPIPS loss value
         """
-        return self.lpips_loss(predictions, targets).mean() 
+        return self.lpips_model(predictions, targets).mean() 

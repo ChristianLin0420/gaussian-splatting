@@ -84,6 +84,7 @@ def _train_worker(rank: int, world_size: int, config: DictConfig, resume_path: O
         }
         wandb.init(
             project=config.logging.wandb_project,
+            name=config.logging.wandb_name,
             config=config_dict,
             resume=True if resume_path else False
         )
@@ -127,13 +128,14 @@ def _train_worker(rank: int, world_size: int, config: DictConfig, resume_path: O
         )
         
         # Create model
-        model = GaussianSplat(config.model.num_gaussians)
+        model = GaussianSplat(config.model.num_gaussians, config.model.use_gradient_checkpointing, config.model.memory_efficient, config.model.chunk_size)
         model = model.to(device)
         
         if config.training.distributed.enabled:
             model = torch.nn.parallel.DistributedDataParallel(
                 model,
-                device_ids=[rank]
+                device_ids=[rank],
+                find_unused_parameters=True
             )
         
         # Create loss function

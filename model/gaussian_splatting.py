@@ -5,6 +5,27 @@ from typing import Tuple, Dict
 import numpy as np
 
 class GaussianSplat(nn.Module):
+    """
+    A neural network module that represents 3D scenes using a collection of 3D Gaussians.
+    
+    This model represents a scene as a set of 3D Gaussian primitives, each with its own:
+    - 3D position
+    - Scale (in xyz dimensions)
+    - Rotation (as quaternion)
+    - Opacity
+    - RGB color features
+    
+    The model can render novel views of the scene from arbitrary camera poses by:
+    1. Projecting 3D Gaussians to 2D
+    2. Computing covariance matrices
+    3. Rendering with alpha compositing
+    
+    Args:
+        num_gaussians (int): Number of Gaussian primitives to represent the scene. Default: 100000
+        use_gradient_checkpointing (bool): Whether to use gradient checkpointing to save memory. Default: False
+        memory_efficient (bool): Whether to use memory-efficient operations. Default: False
+        chunk_size (int): Size of chunks for processing Gaussians during rendering. Default: 500
+    """
     def __init__(self, num_gaussians=100000, use_gradient_checkpointing=False, memory_efficient=False, chunk_size=500):
         super().__init__()
         self.num_gaussians = num_gaussians
@@ -47,7 +68,27 @@ class GaussianSplat(nn.Module):
             self.rotations.data = F.normalize(self.rotations.data, dim=1)
     
     def _render_chunk(self, positions_2d, scales_2d, features, opacity, sorted_indices, image_size, chunk_size=1000):
-        """Render Gaussians in chunks to save memory"""
+        """
+        Render Gaussians in chunks to save memory.
+        
+        This method:
+        1. Processes Gaussians in smaller batches
+        2. Computes Gaussian values for each position
+        3. Performs alpha compositing
+        4. Optionally clears GPU memory
+        
+        Args:
+            positions_2d (torch.Tensor): 2D projected positions of shape (B, N, 2)
+            scales_2d (torch.Tensor): 2D covariance matrices of shape (B, N, 2, 2)
+            features (torch.Tensor): RGB colors of shape (N, 3)
+            opacity (torch.Tensor): Opacity values of shape (N, 1)
+            sorted_indices (torch.Tensor): Indices for back-to-front rendering
+            image_size (tuple): Output image dimensions (H, W)
+            chunk_size (int): Number of Gaussians to process per chunk. Default: 1000
+            
+        Returns:
+            torch.Tensor: Rendered images of shape (B, 3, H, W)
+        """
         batch_size = positions_2d.shape[0]
         H, W = image_size
         
@@ -111,11 +152,16 @@ class GaussianSplat(nn.Module):
         
     def forward(self, camera_poses: torch.Tensor, image_size: Tuple[int, int]) -> Dict[str, torch.Tensor]:
         """
-        Forward pass of the Gaussian Splatting model
+        Forward pass of the Gaussian Splatting model.
+        
+        This method:
+        1. Projects 3D Gaussians to 2D using camera poses
+        2. Computes depth and scales
+        3. Renders the scene with alpha compositing
         
         Args:
-            camera_poses (torch.Tensor): Shape (B, 4, 4) camera poses in world coordinates
-            image_size (tuple): (H, W) output image size
+            camera_poses (torch.Tensor): Camera poses in world coordinates, shape (B, 4, 4)
+            image_size (tuple): Output image dimensions (H, W)
             
         Returns:
             Dict[str, torch.Tensor]: Dictionary containing:
@@ -170,7 +216,22 @@ class GaussianSplat(nn.Module):
         }
     
     def _project_positions(self, camera_poses: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Project 3D positions to 2D image coordinates"""
+        """
+        Project 3D positions to 2D image coordinates.
+        
+        This method:
+        1. Transforms positions to camera space
+        2. Applies perspective projection
+        3. Computes depth values
+        
+        Args:
+            camera_poses (torch.Tensor): Camera transformation matrices of shape (B, 4, 4)
+            
+        Returns:
+            tuple: Contains:
+                - positions_2d (torch.Tensor): Projected 2D positions (B, N, 2)
+                - depths (torch.Tensor): Depth values (B, N)
+        """
         batch_size = camera_poses.shape[0]
         
         # Transform positions to camera space
@@ -195,7 +256,21 @@ class GaussianSplat(nn.Module):
         return positions_2d, depths
     
     def _project_scales(self, camera_poses: torch.Tensor) -> torch.Tensor:
-        """Project 3D Gaussian scales to 2D covariance matrices"""
+        """
+        Project 3D Gaussian scales to 2D covariance matrices.
+        
+        This method:
+        1. Converts quaternions to rotation matrices
+        2. Creates scale matrices
+        3. Computes 3D covariance matrices
+        4. Projects to 2D using camera matrices
+        
+        Args:
+            camera_poses (torch.Tensor): Camera transformation matrices of shape (B, 4, 4)
+            
+        Returns:
+            torch.Tensor: 2D covariance matrices of shape (B, N, 2, 2)
+        """
         batch_size = camera_poses.shape[0]
         
         # Convert quaternions to rotation matrices
@@ -216,7 +291,15 @@ class GaussianSplat(nn.Module):
         return cov_2d
     
     def _quaternion_to_rotation_matrix(self, q: torch.Tensor) -> torch.Tensor:
-        """Convert quaternions to rotation matrices"""
+        """
+        Convert quaternions to rotation matrices.
+        
+        Args:
+            q (torch.Tensor): Quaternions of shape (N, 4) in (w, x, y, z) format
+            
+        Returns:
+            torch.Tensor: Rotation matrices of shape (N, 3, 3)
+        """
         # Normalize quaternions
         q = F.normalize(q, dim=1)
         w, x, y, z = q.unbind(1)
@@ -228,7 +311,18 @@ class GaussianSplat(nn.Module):
         ], dim=1).reshape(-1, 3, 3)
     
     def _compute_jacobian(self, camera_poses: torch.Tensor) -> torch.Tensor:
-        """Compute Jacobian of perspective projection"""
+        """
+        Compute Jacobian of perspective projection.
+        
+        This method computes the Jacobian matrix for projecting 3D Gaussians to 2D,
+        which is needed for accurate covariance projection.
+        
+        Args:
+            camera_poses (torch.Tensor): Camera transformation matrices of shape (B, 4, 4)
+            
+        Returns:
+            torch.Tensor: Jacobian matrices of shape (B, N, 2, 3)
+        """
         batch_size = camera_poses.shape[0]
         
         # Extract camera parameters
@@ -248,10 +342,15 @@ class GaussianSplat(nn.Module):
     
     def prune_gaussians(self, threshold: float = 0.01) -> None:
         """
-        Prune Gaussians with low opacity or those that contribute little to the final rendering
+        Prune Gaussians with low opacity or those that contribute little to the final rendering.
+        
+        This method:
+        1. Identifies Gaussians with opacity below threshold
+        2. Removes them from all parameter tensors
+        3. Updates the number of Gaussians
         
         Args:
-            threshold (float): Opacity threshold below which Gaussians are removed
+            threshold (float): Opacity threshold below which Gaussians are removed. Default: 0.01
         """
         with torch.no_grad():
             mask = self.opacity.squeeze() > threshold
@@ -268,7 +367,12 @@ class GaussianSplat(nn.Module):
     
     def add_gaussians(self, num_new: int) -> None:
         """
-        Add new Gaussians to the model, useful for progressive training
+        Add new Gaussians to the model, useful for progressive training.
+        
+        This method:
+        1. Creates new parameters with appropriate initializations
+        2. Concatenates with existing parameters
+        3. Updates the total number of Gaussians
         
         Args:
             num_new (int): Number of new Gaussians to add
@@ -294,7 +398,13 @@ class GaussianSplat(nn.Module):
         self.num_gaussians += num_new
     
     def optimize_scales(self) -> None:
-        """Optimize scales to prevent degenerate Gaussians"""
+        """
+        Optimize scales to prevent degenerate Gaussians.
+        
+        This method:
+        1. Enforces minimum scale to prevent collapse
+        2. Enforces maximum scale to prevent explosion
+        """
         with torch.no_grad():
             # Ensure minimum scale
             min_scale = 0.0001
@@ -306,13 +416,17 @@ class GaussianSplat(nn.Module):
     
     def get_dense_points(self, num_points: int = 1000000) -> torch.Tensor:
         """
-        Generate dense point cloud from Gaussians for visualization
+        Generate dense point cloud from Gaussians for visualization.
+        
+        This method:
+        1. Samples points based on Gaussian opacity
+        2. Combines positions and colors
         
         Args:
-            num_points (int): Number of points to sample
+            num_points (int): Number of points to sample. Default: 1000000
             
         Returns:
-            torch.Tensor: Point cloud with shape (N, 6) (xyz + rgb)
+            torch.Tensor: Point cloud with shape (N, 6) containing xyz positions and rgb colors
         """
         with torch.no_grad():
             # Sample points based on opacity
@@ -327,10 +441,10 @@ class GaussianSplat(nn.Module):
     
     def save_state(self, path: str) -> None:
         """
-        Save model state including all Gaussian parameters
+        Save model state including all Gaussian parameters.
         
         Args:
-            path (str): Path to save the state
+            path (str): Path to save the state file
         """
         state = {
             'num_gaussians': self.num_gaussians,
@@ -344,10 +458,10 @@ class GaussianSplat(nn.Module):
     
     def load_state(self, path: str) -> None:
         """
-        Load model state
+        Load model state from a saved file.
         
         Args:
-            path (str): Path to the saved state
+            path (str): Path to the saved state file
         """
         state = torch.load(path)
         self.num_gaussians = state['num_gaussians']
@@ -360,10 +474,16 @@ class GaussianSplat(nn.Module):
     @torch.no_grad()
     def merge_nearby_gaussians(self, distance_threshold: float = 0.01) -> None:
         """
-        Merge nearby Gaussians to reduce redundancy
+        Merge nearby Gaussians to reduce redundancy.
+        
+        This method:
+        1. Computes pairwise distances between Gaussians
+        2. Identifies pairs to merge based on threshold
+        3. Combines parameters using weighted averages
+        4. Removes merged Gaussians
         
         Args:
-            distance_threshold (float): Distance threshold for merging
+            distance_threshold (float): Distance threshold for merging. Default: 0.01
         """
         # Compute pairwise distances
         dists = torch.cdist(self.positions, self.positions)

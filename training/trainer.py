@@ -45,16 +45,6 @@ class GaussianSplatTrainer:
         self.val_loader = val_loader
         self.logger = setup_logger(__name__)
         
-        # Initialize wandb if main process
-        if self.is_main_process() and config.logging.wandb_project:
-            print("Initializing wandb")
-            wandb.init(
-                project=config.logging.wandb_project,
-                name=wandb_name or config.logging.get('wandb_name'),
-                config=config,
-                dir=config.training.checkpoint_dir
-            )
-        
         # Initialize optimizer with different learning rates
         self.optimizer = torch.optim.Adam([
             {'params': model.module.positions, 'lr': config.model.position_lr},
@@ -188,7 +178,7 @@ class GaussianSplatTrainer:
             total_loss += loss.item()
             
             # Log progress
-            if batch_idx % self.config.logging.log_interval == 0:
+            if batch_idx % self.config.logging.log_interval == 0 and self.is_main_process():
                 self.logger.info(
                     f'Train Epoch: {epoch} [{batch_idx}/{len(self.train_loader)} '
                     f'({100. * batch_idx / len(self.train_loader):.0f}%)]\t'
@@ -196,11 +186,13 @@ class GaussianSplatTrainer:
                 )
                 
                 # Log to wandb
-                if self.config.logging.wandb_project and self.is_main_process():
+                if self.config.logging.wandb_project:
                     wandb.log({
                         'epoch': epoch,
                         'train_loss': loss.item(),
                         'train_rgb_loss': loss_dict['rgb_loss'].item(),
+                        'train_perceptual_loss': loss_dict['perceptual_loss'].item(),
+                        'train_lpips_loss': loss_dict['lpips_loss'].item(),
                         'train_depth_loss': loss_dict.get('depth_loss', 0.0),
                         'train_normal_loss': loss_dict.get('normal_loss', 0.0),
                         'train_opacity_loss': loss_dict.get('opacity_loss', 0.0),
