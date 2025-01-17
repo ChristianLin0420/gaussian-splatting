@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # List of datasets
-DATASETS=("Chair" "Drums" "Ficus" "Hotdog" "Lego" "Materials" "Mic" "Ship")
+DATASETS=("Drums" "Chair" "Ficus" "Hotdog" "Lego" "Materials" "Mic" "Ship")
 CONFIG_FILE="configs/default_config.yaml"
 
 # Function to update dataset path in config
@@ -9,7 +9,7 @@ update_dataset_path() {
     local dataset=$1
     # Use sed to replace the dataset path line
     # The -i flag means edit in place, the backup extension is ''
-    sed -i'' -e "s|data:.*|dataset_path: \"data/nerf_synthetic/Synthetic_NeRF/${dataset}/processed\"|" $CONFIG_FILE
+    sed -i'' -e "s|dataset_path:.*|dataset_path: \"data/nerf_synthetic/Synthetic_NeRF/${dataset}/processed\"|" $CONFIG_FILE
     # Update wandb name
     sed -i'' -e "s|wandb_name:.*|wandb_name: \"${dataset,,}\"|" $CONFIG_FILE  # ${dataset,,} converts to lowercase
 }

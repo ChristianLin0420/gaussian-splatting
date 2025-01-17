@@ -1,6 +1,6 @@
 # Data Configuration
 data:
-  dataset_path: "data/nerf_synthetic/Synthetic_NeRF/Chair/processed"
+  dataset_path: "data/nerf_synthetic/Synthetic_NeRF/Drums/processed"
   train_split: 0.8
   val_split: 0.1
   test_split: 0.1
@@ -32,10 +32,10 @@ loss:
 # Training Configuration
 training:
   batch_size: 1
-  num_epochs: 100
+  num_epochs: 3
   num_workers: 1
   checkpoint_dir: "checkpoints"
-  checkpoint_interval: 10
+  checkpoint_interval: 1
   resume_training: false
   checkpoint_path: null
   distributed:
@@ -58,7 +58,7 @@ training:
 # Logging
 logging:
   wandb_project: "gaussian_splatting"
-  wandb_name: "chair"
+  wandb_name: "drums"
   log_interval: 10
   eval_interval: 100
   log_dir: "logs"

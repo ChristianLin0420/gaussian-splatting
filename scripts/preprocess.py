@@ -20,11 +20,11 @@ def preprocess(config: DictConfig) -> None:
     logger = setup_logger(__name__)
     
     try:
-        # Initialize preprocessor
-        preprocessor = ScenePreprocessor(config)
-        
         # Get scene directory
         for scene_dir in Path(config.data.dataset_path).glob('*'):
+            # Initialize preprocessor
+            preprocessor = ScenePreprocessor(config)
+    
             if not scene_dir.exists():
                 raise FileNotFoundError(f"Scene directory not found at {scene_dir}")
                 
