@@ -24,31 +24,31 @@ def preprocess(config: DictConfig) -> None:
         preprocessor = ScenePreprocessor(config)
         
         # Get scene directory
-        scene_dir = Path(config.data.dataset_path)
-        if not scene_dir.exists():
-            raise FileNotFoundError(f"Scene directory not found at {scene_dir}")
-            
-        # Create output directory
-        output_dir = scene_dir / "processed"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Process scene
-        try:
-            logger.info(f"Processing scene: {scene_dir.name}")
-            
-            # Check for required files
-            if not _validate_scene_directory(scene_dir):
-                logger.error(f"Scene directory {scene_dir} is missing required files")
-                return
+        for scene_dir in Path(config.data.dataset_path).glob('*'):
+            if not scene_dir.exists():
+                raise FileNotFoundError(f"Scene directory not found at {scene_dir}")
+                
+            # Create output directory
+            output_dir = scene_dir / "processed"
+            output_dir.mkdir(parents=True, exist_ok=True)
             
             # Process scene
-            preprocessor.process_scene(scene_dir, output_dir)
-            
-            logger.info(f"Scene processed successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to process scene: {str(e)}")
-            raise
+            try:
+                logger.info(f"Processing scene: {scene_dir.name}")
+                
+                # Check for required files
+                if not _validate_scene_directory(scene_dir):
+                    logger.error(f"Scene directory {scene_dir} is missing required files")
+                    return
+                
+                # Process scene
+                preprocessor.process_scene(scene_dir, output_dir)
+                
+                logger.info(f"Scene processed successfully")
+                
+            except Exception as e:
+                logger.error(f"Failed to process scene: {str(e)}")
+                raise
         
     except Exception as e:
         logger.error(f"Preprocessing failed: {str(e)}")
