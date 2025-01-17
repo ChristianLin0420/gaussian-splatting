@@ -66,7 +66,7 @@ class GaussianSplatLoss(nn.Module):
         if torch.isfinite(rgb_loss):
             losses['rgb_loss'] = rgb_loss
         else:
-            self.logger.warning("RGB loss is nan/inf, using zero loss")
+            # self.logger.warning("RGB loss is nan/inf, using zero loss")
             losses['rgb_loss'] = torch.tensor(0.0, device=rgb_loss.device, requires_grad=True)
         
         # Perceptual loss with stability check
@@ -74,7 +74,7 @@ class GaussianSplatLoss(nn.Module):
         if torch.isfinite(perceptual_loss):
             losses['perceptual_loss'] = perceptual_loss
         else:
-            self.logger.warning("Perceptual loss is nan/inf, using zero loss")
+            # self.logger.warning("Perceptual loss is nan/inf, using zero loss")
             losses['perceptual_loss'] = torch.tensor(0.0, device=perceptual_loss.device, requires_grad=True)
         
         # LPIPS loss with stability check
@@ -82,7 +82,7 @@ class GaussianSplatLoss(nn.Module):
         if torch.isfinite(lpips_loss):
             losses['lpips_loss'] = lpips_loss
         else:
-            self.logger.warning("LPIPS loss is nan/inf, using zero loss")
+            # self.logger.warning("LPIPS loss is nan/inf, using zero loss")
             losses['lpips_loss'] = torch.tensor(0.0, device=lpips_loss.device, requires_grad=True)
         
         # Initialize total loss
