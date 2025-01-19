@@ -114,6 +114,76 @@ CUDA_VISIBLE_DEVICES=0,1,2 python main.py train --config configs/default_config.
 - `--gpu`: GPU indices for training
 - `--wandb-name`: Optional name for the Weights & Biases run
 
+## Visualization
+
+The project includes comprehensive visualization tools for analyzing trained models and their outputs.
+
+### Basic Visualization
+```bash
+python utils/visualization.py --checkpoint path/to/model.pt --output-dir visualizations
+```
+
+### Advanced Visualization Options
+```bash
+# Generate high-resolution orbit visualization
+python utils/visualization.py \
+    --checkpoint path/to/model.pt \
+    --output-dir visualizations \
+    --image-size 1024 1024 \
+    --orbit-radius 4.0 \
+    --n-views 60 \
+    --elevation 45.0 \
+    --fps 30 \
+    --format mp4
+
+# Create comparison grid of views
+python utils/visualization.py \
+    --checkpoint path/to/model.pt \
+    --output-dir visualizations \
+    --grid-size 2 4 \
+    --save-path orbit_views.png
+
+# Generate animated GIF
+python utils/visualization.py \
+    --checkpoint path/to/model.pt \
+    --output-dir visualizations \
+    --format gif \
+    --fps 24
+```
+
+### Visualization Parameters
+- `--checkpoint`: Path to trained model checkpoint (required)
+- `--output-dir`: Directory to save visualizations (default: "visualizations")
+- `--image-size`: Output resolution as height width (default: 800 800)
+- `--orbit-radius`: Camera orbit radius (default: 3.0)
+- `--n-views`: Number of views in orbit animation (default: 30)
+- `--elevation`: Camera elevation angle in degrees (default: 30.0)
+- `--fps`: Animation frame rate (default: 30)
+- `--format`: Output format for animations: "mp4" or "gif" (default: "mp4")
+- `--grid-size`: Grid layout for multiple views as rows cols
+- `--save-path`: Custom filename for saving visualizations
+
+### Visualization Outputs
+The visualization tool generates several types of outputs:
+
+1. **Orbit Views**: Grid of rendered views from different camera angles
+   - Saved as `orbit_views.png`
+   - Configurable grid layout with `--grid-size`
+
+2. **Orbit Animation**: Smooth camera orbit around the scene
+   - Saved as `orbit_animation.mp4` or `orbit_animation.gif`
+   - Adjustable camera path with `--orbit-radius` and `--elevation`
+   - Configurable frame rate and number of views
+
+3. **Depth Visualization**: Colored depth maps of the scene
+   - Uses viridis colormap by default
+   - Includes optional depth masking
+
+4. **View Comparisons**: Side-by-side comparison of:
+   - Predicted vs target views
+   - Different rendering settings
+   - Multiple camera perspectives
+
 ## Model Architecture
 
 The implementation uses a hierarchical architecture:

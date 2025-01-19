@@ -151,7 +151,7 @@ class GaussianSplatVisualizer:
             torch.Tensor: Camera poses of shape (n_views, 4, 4)
         """
         if center is None:
-            center = torch.zeros(3, device=device)
+            center = torch.zeros(3, device=device, dtype=torch.float32)
             
         poses = []
         for i in range(n_views):
@@ -161,14 +161,15 @@ class GaussianSplatVisualizer:
             x = radius * np.cos(angle) * np.cos(np.radians(elevation))
             y = radius * np.sin(angle) * np.cos(np.radians(elevation))
             z = radius * np.sin(np.radians(elevation))
-            pos = torch.tensor([x, y, z], device=device)
+            pos = torch.tensor([x, y, z], device=device, dtype=torch.float32)
             
             # Create look-at transform
             forward = F.normalize(center - pos, dim=0)
-            right = F.normalize(torch.cross(forward, torch.tensor([0., 0., 1.], device=device)), dim=0)
+            up = torch.tensor([0., 0., 1.], device=device, dtype=torch.float32)
+            right = F.normalize(torch.cross(forward, up), dim=0)
             up = F.normalize(torch.cross(right, forward), dim=0)
             
-            pose = torch.eye(4, device=device)
+            pose = torch.eye(4, device=device, dtype=torch.float32)
             pose[:3, :3] = torch.stack([right, up, -forward], dim=1)
             pose[:3, 3] = pos
             
@@ -313,7 +314,13 @@ def main():
     # Load model
     print(f"Loading model from {args.checkpoint}")
     checkpoint = torch.load(args.checkpoint, map_location=args.device)
-    model = GaussianSplat(**checkpoint.get("model_args", {}))
+    model_config = checkpoint.get("config", {}).get("model", {})
+    model = GaussianSplat(
+        num_gaussians=model_config.get("num_gaussians", 100000),
+        use_gradient_checkpointing=model_config.get("use_gradient_checkpointing", False),
+        memory_efficient=model_config.get("memory_efficient", False),
+        chunk_size=model_config.get("chunk_size", 500)
+    )
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(args.device)
     model.eval()
@@ -337,17 +344,17 @@ def main():
         for i, pose in enumerate(camera_poses):
             print(f"Rendering view {i+1}/{len(camera_poses)}")
             frame = model(pose.unsqueeze(0), tuple(args.image_size))
-            frames.append(frame[0])
+            frames.append(frame['rendered_images'][0])
     
     # Save individual views
-    print("Saving individual views...")
-    grid = visualizer.render_views(
-        model=model,
-        camera_poses=camera_poses[:8],  # Save first 8 views as grid
-        image_size=tuple(args.image_size),
-        save_path="orbit_views.png",
-        grid_size=(2, 4)
-    )
+    # print("Saving individual views...")
+    # grid = visualizer.render_views(
+    #     model=model,
+    #     camera_poses=camera_poses[:8],  # Save first 8 views as grid
+    #     image_size=tuple(args.image_size),
+    #     save_path="orbit_views.png",
+    #     grid_size=(2, 4)
+    # )
     
     # Create animation
     print("Creating animation...")

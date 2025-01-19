@@ -1,6 +1,6 @@
 # Data Configuration
 data:
-  dataset_path: "data/nerf_synthetic/Synthetic_NeRF/Drums/processed"
+  dataset_path: "data/nerf_synthetic/Synthetic_NeRF/Ship/processed"
   train_split: 0.8
   val_split: 0.1
   test_split: 0.1
@@ -58,7 +58,7 @@ training:
 # Logging
 logging:
   wandb_project: "gaussian_splatting"
-  wandb_name: "drums"
+  wandb_name: "ship"
   log_interval: 10
   eval_interval: 100
   log_dir: "logs"

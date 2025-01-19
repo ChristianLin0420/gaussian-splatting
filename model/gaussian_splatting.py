@@ -124,7 +124,10 @@ class GaussianSplat(nn.Module):
                 diff = grid.view(1, H * W, 2) - curr_pos.view(batch_size, 1, 2)  # (B, H*W, 2)
                 
                 # Compute Mahalanobis distance
-                cov_inv = torch.inverse(curr_scale)  # (B, 2, 2)
+                # Handle case where scale matrix is zeros by adding small epsilon
+                eps = 1e-6
+                curr_scale_stable = curr_scale + torch.eye(2, device=curr_scale.device)[None] * eps
+                cov_inv = torch.inverse(curr_scale_stable)  # (B, 2, 2)
                 mahalanobis = torch.sum(
                     (diff @ cov_inv.unsqueeze(1)) * diff,
                     dim=-1
@@ -190,7 +193,7 @@ class GaussianSplat(nn.Module):
         # Project 3D Gaussians to 2D
         positions_2d, depths = self._project_positions(camera_poses)  # (B, N, 2), (B, N)
         scales_2d = self._project_scales(camera_poses)               # (B, N, 2, 2)
-        
+
         # Sort Gaussians by depth for proper alpha compositing
         sorted_indices = torch.argsort(depths, dim=1, descending=True)  # Back to front
         
